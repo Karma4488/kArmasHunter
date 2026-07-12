@@ -210,6 +210,7 @@ class KArmasHunter:
         self.wildcard_baseline = {}
 
         self.q = queue.Queue()
+        self.enqueued_paths = set()
         self.results = []
         self.lock = threading.Lock()
         self.visited_dirs = set()
@@ -394,7 +395,7 @@ class KArmasHunter:
             rel = parts.path.lstrip("/")
             if not rel:
                 continue
-            self.q.put((rel, depth))
+            self._queue_path_once(rel, depth)
 
             if self.recursive and parts.path.endswith("/") and depth < self.max_depth:
                 dir_path = rel
@@ -406,11 +407,18 @@ class KArmasHunter:
                     self._enqueue_wordlist(dir_path, depth + 1)
 
     # ---------- Queue building ----------
+    def _queue_path_once(self, path, depth):
+        with self.lock:
+            if path in self.enqueued_paths:
+                return
+            self.enqueued_paths.add(path)
+        self.q.put((path, depth))
+
     def _enqueue_wordlist(self, prefix, depth):
         for word in self.wordlist:
             for ext in self.extensions:
                 candidate = f"{prefix}{word}{ext}"
-                self.q.put((candidate, depth))
+                self._queue_path_once(candidate, depth)
 
     # ---------- Run ----------
     def run(self):
