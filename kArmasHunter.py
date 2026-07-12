@@ -156,6 +156,9 @@ RANDOM_USER_AGENTS = [
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
 ]
 
+# sentinel used to mark a wildcard baseline probe currently in progress
+WILDCARD_PROBING = object()
+
 # ============================================================
 #  LINK EXTRACTOR (passive crawl assist - dirhunt-style)
 # ============================================================
@@ -252,7 +255,8 @@ class KArmasHunter:
         if not self.detect_wildcard:
             return
         with self.lock:
-            if self.wildcard_baseline.get(prefix, False) is not False:
+            state = self.wildcard_baseline.get(prefix)
+            if prefix in self.wildcard_baseline and state is not WILDCARD_PROBING:
                 return
         probe = f"{prefix}kArmasHunter-nonexistent-{random.randint(100000,999999)}.html"
         url = urljoin(self.base_url, probe)
@@ -307,7 +311,7 @@ class KArmasHunter:
                 if self.detect_wildcard:
                     with self.lock:
                         if prefix not in self.wildcard_baseline:
-                            self.wildcard_baseline[prefix] = False
+                            self.wildcard_baseline[prefix] = WILDCARD_PROBING
                             need_probe = True
                         else:
                             need_probe = False
@@ -354,9 +358,8 @@ class KArmasHunter:
                 self._progress()
 
     def _progress(self):
-        with self.lock:
-            scanned = self.total_scanned
-            found = len(self.results)
+        scanned = self.total_scanned
+        found = len(self.results)
         sys.stdout.write(
             f"\r{C.DIM}  scanned: {scanned}  |  found: {found}  |  queue: {self.q.qsize()}   {C.RESET}"
         )
