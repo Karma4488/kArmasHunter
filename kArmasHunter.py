@@ -260,7 +260,8 @@ class KArmasHunter:
             return
         with self.lock:
             state = self.wildcard_baseline.get(prefix, WILDCARD_MISSING)
-            # only the claiming worker (which marks WILDCARD_PROBING) should probe
+            # only the worker that already claimed this prefix via
+            # _mark_wildcard_probe_needed() should execute the probe
             if state is not WILDCARD_PROBING:
                 return
         probe = f"{prefix}kArmasHunter-nonexistent-{random.randint(100000,999999)}.html"
