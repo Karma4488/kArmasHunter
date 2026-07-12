@@ -15,12 +15,11 @@ import ssl
 import socket
 import threading
 import queue
-import re
 import random
 import csv
 from datetime import datetime
 from urllib import request as urlrequest
-from urllib.parse import urljoin, urlparse, urlsplit
+from urllib.parse import urljoin, urlsplit
 from urllib.error import HTTPError, URLError
 from html.parser import HTMLParser
 
@@ -198,7 +197,7 @@ class KArmasHunter:
         self.out_format = out_format
         self.random_agent = random_agent
         self.retries = max(1, retries)
-        self.exclude_sizes = set(exclude_sizes) if exclude_sizes else set()
+        self.exclude_sizes = {str(size) for size in exclude_sizes} if exclude_sizes else set()
 
         self.detect_wildcard = detect_wildcard
         # per-prefix baseline of "soft 404" (status, length) signatures, dirsearch-style
@@ -250,18 +249,23 @@ class KArmasHunter:
         """Probe a random, near-certainly-nonexistent path to fingerprint the
         server's 'soft 404' response (a page that returns 200 for anything).
         Any real result matching this signature is treated as a false positive."""
-        if not self.detect_wildcard or prefix in self.wildcard_baseline:
+        if not self.detect_wildcard:
             return
+        with self.lock:
+            if self.wildcard_baseline.get(prefix, False) is not False:
+                return
         probe = f"{prefix}kArmasHunter-nonexistent-{random.randint(100000,999999)}.html"
         url = urljoin(self.base_url, probe)
         code, length, _ = self._request(url)
-        if code is not None:
-            self.wildcard_baseline[prefix] = (code, length)
-        else:
-            self.wildcard_baseline[prefix] = None
+        with self.lock:
+            if code is not None:
+                self.wildcard_baseline[prefix] = (code, length)
+            else:
+                self.wildcard_baseline[prefix] = None
 
     def _is_wildcard_match(self, prefix, code, length):
-        baseline = self.wildcard_baseline.get(prefix)
+        with self.lock:
+            baseline = self.wildcard_baseline.get(prefix)
         if not baseline:
             return False
         b_code, b_length = baseline
@@ -283,7 +287,7 @@ class KArmasHunter:
     def _passes_filter(self, code, length=None):
         if code is None:
             return False
-        if length is not None and length in self.exclude_sizes:
+        if length is not None and str(length) in self.exclude_sizes:
             return False
         if self.status_filter:
             return code in self.status_filter
@@ -298,50 +302,63 @@ class KArmasHunter:
                 path, depth = self.q.get(timeout=1)
             except queue.Empty:
                 return
-            prefix = path.rsplit("/", 1)[0] + "/" if "/" in path else ""
-            if self.detect_wildcard:
+            try:
+                prefix = path.rsplit("/", 1)[0] + "/" if "/" in path else ""
+                if self.detect_wildcard:
+                    with self.lock:
+                        if prefix not in self.wildcard_baseline:
+                            self.wildcard_baseline[prefix] = False
+                            need_probe = True
+                        else:
+                            need_probe = False
+                    if need_probe:
+                        self._detect_wildcard_for_prefix(prefix)
+
+                url = urljoin(self.base_url, path)
+                code, length, body = self._request(url)
                 with self.lock:
-                    need_probe = prefix not in self.wildcard_baseline
-                if need_probe:
-                    self._detect_wildcard_for_prefix(prefix)
+                    self.total_scanned += 1
 
-            url = urljoin(self.base_url, path)
-            code, length, body = self._request(url)
-            self.total_scanned += 1
+                is_wildcard = self.detect_wildcard and self._is_wildcard_match(prefix, code, length)
 
-            is_wildcard = self.detect_wildcard and self._is_wildcard_match(prefix, code, length)
+                if not is_wildcard and self._passes_filter(code, length):
+                    with self.lock:
+                        self.results.append({
+                            "url": url, "status": code, "length": length,
+                            "depth": depth
+                        })
+                    col = self._status_color(code)
+                    sys.stdout.write(
+                        f"\r{' '*100}\r{col}[{code}]{C.RESET} "
+                        f"{C.DIM}({length} bytes){C.RESET}  {url}\n"
+                    )
+                    sys.stdout.flush()
 
-            if not is_wildcard and self._passes_filter(code, length):
-                with self.lock:
-                    self.results.append({
-                        "url": url, "status": code, "length": length,
-                        "depth": depth
-                    })
-                col = self._status_color(code)
-                sys.stdout.write(
-                    f"\r{' '*100}\r{col}[{code}]{C.RESET} "
-                    f"{C.DIM}({length} bytes){C.RESET}  {url}\n"
-                )
-                sys.stdout.flush()
+                    # recursive descent into found directories
+                    if self.recursive and path.endswith("/") and depth < self.max_depth:
+                        with self.lock:
+                            is_new_dir = path not in self.visited_dirs
+                            if is_new_dir:
+                                self.visited_dirs.add(path)
+                        if is_new_dir:
+                            self._enqueue_wordlist(path, depth + 1)
 
-                # recursive descent into found directories
-                if self.recursive and path.endswith("/") and depth < self.max_depth:
-                    if path not in self.visited_dirs:
-                        self.visited_dirs.add(path)
-                        self._enqueue_wordlist(path, depth + 1)
+                    # passive crawl: pull links out of HTML responses
+                    if self.crawl and body and code and 200 <= code < 300:
+                        self._extract_and_queue(url, body, depth)
 
-                # passive crawl: pull links out of HTML responses
-                if self.crawl and body and code and 200 <= code < 300:
-                    self._extract_and_queue(url, body, depth)
-
-            if self.delay:
-                time.sleep(self.delay)
-            self.q.task_done()
-            self._progress()
+                if self.delay:
+                    time.sleep(self.delay)
+            finally:
+                self.q.task_done()
+                self._progress()
 
     def _progress(self):
+        with self.lock:
+            scanned = self.total_scanned
+            found = len(self.results)
         sys.stdout.write(
-            f"\r{C.DIM}  scanned: {self.total_scanned}  |  found: {len(self.results)}  |  queue: {self.q.qsize()}   {C.RESET}"
+            f"\r{C.DIM}  scanned: {scanned}  |  found: {found}  |  queue: {self.q.qsize()}   {C.RESET}"
         )
         sys.stdout.flush()
 
@@ -361,13 +378,24 @@ class KArmasHunter:
             parts = urlsplit(full)
             if parts.netloc != base_netloc:
                 continue
-            if full in self.crawled_links:
+            with self.lock:
+                if full in self.crawled_links:
+                    continue
+                self.crawled_links.add(full)
+
+            rel = parts.path.lstrip("/")
+            if not rel:
                 continue
-            self.crawled_links.add(full)
-            rel = parts.path
-            if rel and rel not in self.visited_dirs:
-                # queue discovered path directly (not brute-forced, but verified)
-                pass  # already retrieved via crawl; no need to re-request
+            self.q.put((rel, depth))
+
+            if self.recursive and parts.path.endswith("/") and depth < self.max_depth:
+                dir_path = rel if rel.endswith("/") else rel + "/"
+                with self.lock:
+                    is_new_dir = dir_path not in self.visited_dirs
+                    if is_new_dir:
+                        self.visited_dirs.add(dir_path)
+                if is_new_dir:
+                    self._enqueue_wordlist(dir_path, depth + 1)
 
     # ---------- Queue building ----------
     def _enqueue_wordlist(self, prefix, depth):
@@ -399,12 +427,16 @@ class KArmasHunter:
             workers.append(t)
 
         try:
-            while any(t.is_alive() for t in workers) and not self.q.empty():
-                time.sleep(0.2)
             self.q.join()
         except KeyboardInterrupt:
             print(C.R + "\n\n  [!] Interrupted by user. Stopping workers..." + C.RESET)
             self.stop_flag.set()
+            while not self.q.empty():
+                try:
+                    self.q.get_nowait()
+                    self.q.task_done()
+                except queue.Empty:
+                    break
 
         print("\n" + C.G + "-" * 72 + C.RESET)
         print(C.G + C.BOLD + f"  [+] Scan complete. {len(self.results)} paths found "

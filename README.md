@@ -1,20 +1,57 @@
 # kArmasHunter
 
-python3 kArmasHunter.py -u https://target.tld -w mylist.txt --no-wildcard -t 30
+`kArmasHunter` is a single-file, stdlib-only web content discovery tool for directory and file brute-forcing with optional passive crawl assistance.
 
-python3 kArmasHunter.py -u https://target.tld -w mylist.txt --no-wildcard --no-crawl -x "" -t 30
+## Features
 
+- Multi-threaded directory/file discovery
+- Recursive wordlist expansion into discovered directories
+- Passive same-origin link extraction from HTML responses
+- Wildcard/soft-404 baseline detection per directory prefix
+- Status-code and content-length filtering
+- Retry support and optional rotating User-Agent pool
+- Report output in `txt`, `json`, or `csv`
 
---random-agent — rotates through a pool of realistic browser UAs per request
---retries N — retry failed connections with backoff instead of dying on one timeout
---exclude-sizes LIST — filter out responses by Content-Length, dirsearch-style
---no-wildcard — disable the false-positive detection if you want raw brute-force behavior
+## Installation
 
+No external dependencies are required.
 
-"""
-kArmasHunter - Web Content Discovery Tool
-Dirsearch/Dirhunt-style directory & file brute-forcer with passive crawl assist.
-Single-file, stdlib-only. Termux / Kali compatible.
+```bash
+git clone https://github.com/Karma4488/kArmasHunter.git
+cd kArmasHunter
+python3 kArmasHunter.py --help
+```
 
-We Are Legion. We Do Not Forget. We Do Not Forgive.
-"""
+## Usage
+
+```bash
+python3 kArmasHunter.py -u <url> [options]
+```
+
+Common examples:
+
+```bash
+# Basic scan
+python3 kArmasHunter.py -u https://target.tld
+
+# Wordlist + more threads + retries
+python3 kArmasHunter.py -u https://target.tld -w mylist.txt -t 30 --retries 3
+
+# Recursive scan with passive crawl enabled (default)
+python3 kArmasHunter.py -u https://target.tld -r --max-depth 2
+
+# Disable wildcard detection and crawl
+python3 kArmasHunter.py -u https://target.tld --no-wildcard --no-crawl
+
+# Exclude status codes and content sizes
+python3 kArmasHunter.py -u https://target.tld -x 404,403 --exclude-sizes 0,1234
+
+# Write JSON report
+python3 kArmasHunter.py -u https://target.tld -o report.json -f json
+```
+
+## Notes
+
+- `--exclude` defaults to `404`.
+- `--exclude-sizes` values are matched against normalized response `Content-Length` values.
+- Use this tool only against targets you own or are explicitly authorized to test.
