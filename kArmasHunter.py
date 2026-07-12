@@ -259,7 +259,9 @@ class KArmasHunter:
             return
         with self.lock:
             state = self.wildcard_baseline.get(prefix, WILDCARD_MISSING)
-            if state not in (WILDCARD_PROBING, WILDCARD_MISSING):
+            # only proceed when this prefix is either unseen or already marked
+            # as an in-progress probe by the claiming worker
+            if state is not WILDCARD_MISSING and state is not WILDCARD_PROBING:
                 return
         probe = f"{prefix}kArmasHunter-nonexistent-{random.randint(100000,999999)}.html"
         url = urljoin(self.base_url, probe)
@@ -438,7 +440,7 @@ class KArmasHunter:
         except KeyboardInterrupt:
             print(C.R + "\n\n  [!] Interrupted by user. Stopping workers..." + C.RESET)
             self.stop_flag.set()
-            while not self.q.empty():
+            while True:
                 try:
                     self.q.get_nowait()
                     self.q.task_done()
