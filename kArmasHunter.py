@@ -259,9 +259,8 @@ class KArmasHunter:
             return
         with self.lock:
             state = self.wildcard_baseline.get(prefix, WILDCARD_MISSING)
-            # only proceed when this prefix is either unseen or already marked
-            # as an in-progress probe by the claiming worker
-            if state is not WILDCARD_MISSING and state is not WILDCARD_PROBING:
+            # only the claiming worker (which marks WILDCARD_PROBING) should probe
+            if state is not WILDCARD_PROBING:
                 return
         probe = f"{prefix}kArmasHunter-nonexistent-{random.randint(100000,999999)}.html"
         url = urljoin(self.base_url, probe)
@@ -398,7 +397,7 @@ class KArmasHunter:
             self.q.put((rel, depth))
 
             if self.recursive and parts.path.endswith("/") and depth < self.max_depth:
-                dir_path = rel if rel.endswith("/") else rel + "/"
+                dir_path = rel
                 with self.lock:
                     is_new_dir = dir_path not in self.visited_dirs
                     if is_new_dir:
