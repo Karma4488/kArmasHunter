@@ -53,5 +53,5 @@ python3 kArmasHunter.py -u https://target.tld -o report.json -f json
 ## Notes
 
 - `--exclude` defaults to `404`.
-- `--exclude-sizes` values are matched against normalized response `Content-Length` values.
+- `--exclude-sizes` values are converted to strings and matched against response `Content-Length` as a string.
 - Use this tool only against targets you own or are explicitly authorized to test.

@@ -156,7 +156,9 @@ RANDOM_USER_AGENTS = [
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
 ]
 
-# sentinel used to mark a wildcard baseline probe currently in progress
+# wildcard probe sentinels:
+# - WILDCARD_PROBING: probe currently in progress for this prefix
+# - WILDCARD_MISSING: no baseline state exists for this prefix yet
 WILDCARD_PROBING = object()
 WILDCARD_MISSING = object()
 
@@ -257,7 +259,7 @@ class KArmasHunter:
             return
         with self.lock:
             state = self.wildcard_baseline.get(prefix, WILDCARD_MISSING)
-            if state is not WILDCARD_PROBING and state is not WILDCARD_MISSING:
+            if state not in (WILDCARD_PROBING, WILDCARD_MISSING):
                 return
         probe = f"{prefix}kArmasHunter-nonexistent-{random.randint(100000,999999)}.html"
         url = urljoin(self.base_url, probe)
@@ -300,6 +302,13 @@ class KArmasHunter:
             return code not in self.exclude_status
         return True
 
+    def _mark_wildcard_probe_needed(self, prefix):
+        with self.lock:
+            if prefix in self.wildcard_baseline:
+                return False
+            self.wildcard_baseline[prefix] = WILDCARD_PROBING
+            return True
+
     # ---------- Worker ----------
     def _worker(self):
         while not self.stop_flag.is_set():
@@ -309,15 +318,8 @@ class KArmasHunter:
                 return
             try:
                 prefix = path.rsplit("/", 1)[0] + "/" if "/" in path else ""
-                if self.detect_wildcard:
-                    with self.lock:
-                        if prefix not in self.wildcard_baseline:
-                            self.wildcard_baseline[prefix] = WILDCARD_PROBING
-                            need_probe = True
-                        else:
-                            need_probe = False
-                    if need_probe:
-                        self._detect_wildcard_for_prefix(prefix)
+                if self.detect_wildcard and self._mark_wildcard_probe_needed(prefix):
+                    self._detect_wildcard_for_prefix(prefix)
 
                 url = urljoin(self.base_url, path)
                 code, length, body = self._request(url)
