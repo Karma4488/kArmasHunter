@@ -276,7 +276,9 @@ class KArmasHunter:
     def _is_wildcard_match(self, prefix, code, length):
         with self.lock:
             baseline = self.wildcard_baseline.get(prefix)
-        if not baseline:
+        # Treat sentinel states (None = probe failed, WILDCARD_PROBING = still in
+        # flight) as "no baseline" — do not filter the result.
+        if not baseline or baseline is WILDCARD_PROBING:
             return False
         b_code, b_length = baseline
         return code == b_code and length == b_length
@@ -321,8 +323,18 @@ class KArmasHunter:
                 return
             try:
                 prefix = path.rsplit("/", 1)[0] + "/" if "/" in path else ""
-                if self.detect_wildcard and self._mark_wildcard_probe_needed(prefix):
-                    self._detect_wildcard_for_prefix(prefix)
+                if self.detect_wildcard:
+                    if self._mark_wildcard_probe_needed(prefix):
+                        self._detect_wildcard_for_prefix(prefix)
+                    else:
+                        # Wait for an in-progress probe on the same prefix to settle
+                        # before evaluating results against the baseline.
+                        while True:
+                            with self.lock:
+                                state = self.wildcard_baseline.get(prefix)
+                            if state is not WILDCARD_PROBING:
+                                break
+                            time.sleep(0.05)
 
                 url = urljoin(self.base_url, path)
                 code, length, body = self._request(url)
@@ -501,11 +513,18 @@ def parse_status_list(s):
     for chunk in s.split(","):
         chunk = chunk.strip()
         if "-" in chunk:
-            a, b = chunk.split("-")
+            a, b = chunk.split("-", 1)
             out.extend(range(int(a), int(b) + 1))
         elif chunk:
             out.append(int(chunk))
     return out
+
+def _require_value(args, i, flag):
+    """Return args[i+1] or exit with an error if it is out of bounds."""
+    if i + 1 >= len(args):
+        print(C.R + f"  [x] {flag} requires a value" + C.RESET)
+        sys.exit(1)
+    return args[i + 1]
 
 def print_help():
     print(f"""{C.G}
@@ -574,38 +593,40 @@ def main():
     while i < len(args):
         a = args[i]
         if a in ("-u", "--url"):
-            i += 1; url = args[i]
+            url = _require_value(args, i, a); i += 1
         elif a in ("-w", "--wordlist"):
-            i += 1; wordlist_path = args[i]
+            wordlist_path = _require_value(args, i, a); i += 1
         elif a in ("-e", "--extensions"):
-            i += 1; extensions = [e if e.startswith(".") or e == "" else "." + e
-                                   for e in args[i].split(",")]
+            val = _require_value(args, i, a); i += 1
+            extensions = [e if e.startswith(".") or e == "" else "." + e
+                          for e in val.split(",")]
         elif a in ("-t", "--threads"):
-            i += 1; threads = int(args[i])
+            threads = int(_require_value(args, i, a)); i += 1
         elif a in ("-r", "--recursive"):
             recursive = True
         elif a == "--max-depth":
-            i += 1; max_depth = int(args[i])
+            max_depth = int(_require_value(args, i, a)); i += 1
         elif a == "--timeout":
-            i += 1; timeout = int(args[i])
+            timeout = int(_require_value(args, i, a)); i += 1
         elif a == "--delay":
-            i += 1; delay = float(args[i])
+            delay = float(_require_value(args, i, a)); i += 1
         elif a == "--no-crawl":
             crawl = False
         elif a in ("-s", "--status"):
-            i += 1; status_filter = args[i]
+            status_filter = _require_value(args, i, a); i += 1
         elif a in ("-x", "--exclude"):
-            i += 1; exclude_status = args[i]
+            exclude_status = _require_value(args, i, a); i += 1
         elif a in ("-o", "--output"):
-            i += 1; out_file = args[i]
+            out_file = _require_value(args, i, a); i += 1
         elif a in ("-f", "--format"):
-            i += 1; out_format = args[i]
+            out_format = _require_value(args, i, a); i += 1
         elif a == "--random-agent":
             random_agent = True
         elif a == "--retries":
-            i += 1; retries = int(args[i])
+            retries = int(_require_value(args, i, a)); i += 1
         elif a == "--exclude-sizes":
-            i += 1; exclude_sizes = [s.strip() for s in args[i].split(",") if s.strip()]
+            val = _require_value(args, i, a); i += 1
+            exclude_sizes = [s.strip() for s in val.split(",") if s.strip()]
         elif a == "--no-wildcard":
             detect_wildcard = False
         else:
